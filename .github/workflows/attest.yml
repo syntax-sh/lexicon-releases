@@ -1,0 +1,57 @@
+# Generates GitHub artifact attestations for a release's artifacts so
+# installers that support native verification (mise's aqua backend, aqua
+# itself, `gh attestation verify`) can check that the artifacts are exactly
+# the bytes this repo's release published.
+#
+# Like publish-npm.yml, this runs here — in the public releases repo — because
+# attestations aren't available on private repos without GHE. It attests the
+# published artifacts (the source build is private), which pairs with the
+# per-artifact .sha256 checksums also published on each release.
+#
+# aqua-registry entries reference this as:
+#   github_artifact_attestations:
+#     signer_workflow: syntax-sh/lexicon-releases/.github/workflows/attest.yml
+name: Attest release artifacts
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attest (e.g. v0.4.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: meta
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          test -n "$tag" || { echo "no tag" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'lexicon-*.tar.gz' \
+            --dir artifacts
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/lexicon-*.tar.gz
