@@ -1,0 +1,76 @@
+# Publishes the @syntax-sh npm packages for a lexicon release, with npm
+# provenance. Runs here — in the public releases repo — because npm
+# provenance attestations require a public repository whose workflow
+# performed the publish, and the source repo is private.
+#
+# Auth: npm trusted publishing (OIDC) configured for each @syntax-sh package
+# against this repo + this workflow file. No long-lived token; provenance is
+# generated automatically. The `id-token: write` permission is what lets the
+# job mint the OIDC token.
+#
+# Triggers on the GitHub Release that dist publishes here from the source
+# repo's pipeline, or manually via workflow_dispatch with a tag.
+name: Publish npm packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.4.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve tag and version
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          test -n "$tag" || { echo "no tag" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'lexicon-*.tar.gz*' \
+            --dir artifacts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Build npm packages
+        run: bash scripts/package-npm.sh "${{ steps.meta.outputs.version }}" artifacts
+
+      - name: Publish (platform packages first, then main)
+        run: |
+          set -euo pipefail
+          for pkg in lexicon-darwin-arm64 lexicon-darwin-x64 lexicon-linux-x64 lexicon-win32-x64 lexicon; do
+            if npm view "@syntax-sh/$pkg@${{ steps.meta.outputs.version }}" version >/dev/null 2>&1; then
+              echo "@syntax-sh/$pkg@${{ steps.meta.outputs.version }} already published, skipping"
+              continue
+            fi
+            (cd "npm/@syntax-sh/$pkg" && npm publish --provenance --access public)
+          done
