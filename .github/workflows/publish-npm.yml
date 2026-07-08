@@ -56,15 +56,12 @@ jobs:
             --pattern 'lexicon-*.tar.gz*' \
             --dir artifacts
 
+      # Node 24 bundles npm >= 11.5, required for the trusted-publishing OIDC
+      # token exchange (npm 10 silently falls back to unauthenticated and 404s).
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
-
-      # Node 22 bundles npm 10, which can't do the trusted-publishing OIDC
-      # token exchange (needs npm >= 11.5) — without this the publish 404s.
-      - name: Update npm for trusted publishing
-        run: npm install -g npm@latest && npm --version
 
       - name: Build npm packages
         run: bash scripts/package-npm.sh "${{ steps.meta.outputs.version }}" artifacts
